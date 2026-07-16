@@ -31,7 +31,7 @@ class ConcentrationDutton14(ccl.halos.Concentration):
 
 
 class Mvir2MtotNFWt(object):
-    def __init__(self, concentration_f, epsilon_f,
+    def __init__(self, concentration_f,
                  c_range=[1.0, 30.], nc=40,
                  eps_range=[1.0, 5.0], neps=20,
                  xv_min=1E-3, xv_inf=1E3, dl10xv=0.001,
@@ -40,7 +40,7 @@ class Mvir2MtotNFWt(object):
 
         self.analytic = analytic
         self.cf = concentration_f
-        self.ef = epsilon_f
+        self.ef = epsilon_bfc
 
         self.l10xv_min = np.log10(xv_min)
         self.dl10xv = dl10xv
@@ -104,8 +104,6 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
         self.theta_c0 = 0.3  # Scaling of the core radius of the hot gas profile. Eq. 2.12 and page 18.
         self.alpha = 1.0  # Inner slope of the hot gas profile. Eq. 2.12.
         self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12.
-        self.eps0 = 4  # Scaling of the outer truncation radius of the gas profile. Eq. 2.8.
-        self.eps1 = 0.5  # Scaling of the outer truncation radius of the gas profile. Eq. 2.8.
         self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18.
         self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21.
         self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21.
@@ -127,11 +125,6 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
             self.mu = mu
         if delta is not None:
             self.delta = delta
-
-    def _eps(self, cosmo, M, a):
-        eps = self.eps0-self.eps1*1.686/ccl.sigmaM(cosmo, M, a)
-        eps = eps * (eps > 1) + (eps < 1) * 1.0
-        return eps
 
     def _fhga(self, Mv, a, cosmo):
         xstar = Mv*cosmo['h']/self.Mstar
@@ -160,7 +153,7 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
 
         theta_c = self.theta_c0  # /a**0.5 <- cancelling redshift dependence for now
 
-        eps = self._eps(cosmo, Mv, a)
+        eps = epsilon_bfc(cosmo, Mv, a)
 
         return 1/((1+(xvir/theta_c)**self.alpha)**(beta[:, None]/self.alpha) *
                   (1+(xvir/eps[:, None])**self.gamma)**(self.delta/self.gamma))
