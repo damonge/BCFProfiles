@@ -10,8 +10,8 @@ def epsilon_bfc(cosmo, M, a):
 
 
 class ConcentrationDutton14(ccl.halos.Concentration):
-    """Concentrations form Dutton+Maccio (2014)
-    c200 (200 times RHOC)
+    """Concentrations form Dutton+Maccio. 2014)
+    c200. 200 times RHOC)
     Assumes PLANCK cosmology
     """
     name = 'Dutton14'
@@ -25,8 +25,8 @@ class ConcentrationDutton14(ccl.halos.Concentration):
     def _concentration(self, cosmo, M, a):
         z = 1/a-1
         M_pivot_inv = cosmo["h"] * 1E-12
-        A = 0.520 + (0.905 - 0.520)*np.exp(-0.617*z**1.21) #0.905 #1.025
-        B = -0.101 + 0.026*z #-0.101 #0.097
+        A = 0.520 + (0.905 - 0.520) * np.exp(-0.617*z**1.21)
+        B = -0.101 + 0.026*z
         return 10.0**A*(M*M_pivot_inv)**(B)
 
 
@@ -50,13 +50,14 @@ class Mvir2MtotNFWt(object):
 
         self.int_1 = np.array([[self.int_NFW(1, c, eps) for eps in self.epss]
                                for c in self.cs])
-        self.int_inf = np.array([[self.int_NFW(self.xv_inf, c, eps) for eps in self.epss]
+        self.int_inf = np.array([[self.int_NFW(self.xv_inf, c, eps)
+                                  for eps in self.epss]
                                  for c in self.cs])
         self.conv_arr = self.int_inf/self.int_1
         self.conv_int = RegularGridInterpolator([self.cs, self.epss],
                                                 self.conv_arr,
-                                                method=interp_kind)        
-    
+                                                method=interp_kind)
+
     def int_NFW(self, xv_max, c, eps):
         if self.analytic:
             x = c*xv_max
@@ -66,7 +67,7 @@ class Mvir2MtotNFWt(object):
             pre = t2/(2*(t2+1)**3*(1+x)*(t2+x2))
             f1 = (t2+1)*x*(x*(x+1)-t2*(x-1)*(2+3*x)-2*t2**2)
             f2 = tau*(x+1)*(t2+x2)*(2*(3*t2-1)*np.arctan(x/tau) +
-                                      tau*(t2-3)*np.log(t2*(1+x)**2/(t2+x2)))
+                                    tau*(t2-3)*np.log(t2*(1+x)**2/(t2+x2)))
             return pre * (f1+f2)
         else:
             l10xv_max = np.log10(xv_max)
@@ -96,20 +97,21 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
                                      padding_lo_fftlog=1E-2,
                                      n_per_decade=500,
                                      plaw_fourier=-2.)
-        self.log10Mc = log10Mc
-        self.mu = mu
-        self.delta = delta
-        self.theta_c0 = 0.3  # 0.1  <- these are Michael's values
-        self.alpha = 1.0
-        self.gamma = 1.5
-        self.eps0 = 4
-        self.eps1 = 0.5
-        self.ciga0 = 0.1
-        self.Mstar = 2.5E11
-        self.Nstar = 0.028  # 0.04
-        self.eta = 0.1  # 0.32
-        self.deta = 0.22  # 0.28
-        self.zeta = 1.376
+        # All equations below are from 2507.07892, unless otherwise stated.
+        self.log10Mc = log10Mc  # Mass scaling of intermediate-radius slope of hot gas profile. Eq. 2.12.
+        self.mu = mu  # Mass slope of intermediate-radius slope of hot gas profile. Eq. 2.12.
+        self.delta = delta  # Outer slope of the hot gas profile. Eq. 2.12.
+        self.theta_c0 = 0.3  # Scaling of the core radius of the hot gas profile. Eq. 2.12 and page 18.
+        self.alpha = 1.0  # Inner slope of the hot gas profile. Eq. 2.12.
+        self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12.
+        self.eps0 = 4  # Scaling of the outer truncation radius of the gas profile. Eq. 2.8.
+        self.eps1 = 0.5  # Scaling of the outer truncation radius of the gas profile. Eq. 2.8.
+        self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18.
+        self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21.
+        self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21.
+        self.eta = 0.07  # High-mass slope of the stellar mass fraction. Eq. 2.21.
+        self.deta = 0.22  # High-mass slope of the central galaxy stellar mass fraction. Eq. 2.21.
+        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2.
         self.xv_min = xv_min
         self.xv_max = xv_max
         self.Mv2Mt = Mvir2Mtot
@@ -130,7 +132,7 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
         eps = self.eps0-self.eps1*1.686/ccl.sigmaM(cosmo, M, a)
         eps = eps * (eps > 1) + (eps < 1) * 1.0
         return eps
-        
+
     def _fhga(self, Mv, a, cosmo):
         xstar = Mv*cosmo['h']/self.Mstar
         fstar = self.Nstar/(xstar**self.eta+1/xstar**self.zeta)
