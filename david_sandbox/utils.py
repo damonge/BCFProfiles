@@ -161,7 +161,7 @@ class HaloProfileCustom(ccl.halos.HaloProfile):
 
 
 class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
-    def __init__(self, *, mass_def, log10Mc, mu, delta, XH=0.76,
+    def __init__(self, *, mass_def, log10Mc, mu, delta, a0_nth=0.1, XH=0.76,
                  Mvir2Mtot, xv_min=1E-3, xv_max=1E3, nxv=260):
         super().__init__(mass_def=mass_def)
         self.update_precision_fftlog(padding_hi_fftlog=1E2,
@@ -177,10 +177,14 @@ class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
         self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12. # noqa
         self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18. # noqa
         self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21. # noqa
-        self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21. # noqa
-        self.eta = 0.07  # High-mass slope of the stellar mass fraction. Eq. 2.21. # noqa
+        self.Nstar = 0.03  # Normalisation of the stellar mass fractions. Eq. 2.21. # noqa
+        # Changed from 0.028 to 0.03 in Table 1 of 2507.07991
+        self.eta = 0.1  # High-mass slope of the stellar mass fraction. Eq. 2.21. # noqa
+        # Changed from 0.07 to 0.1 in Table 1 of 2507.07991
         self.deta = 0.22  # High-mass slope of the central galaxy stellar mass fraction. Eq. 2.21. # noqa
-        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2. # noqa   
+        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2. # noqa
+        self.n_nth = 0.8  # Non-thermal pressure profile (P_nth = a_nth(z)*(r/rvir)^n_nth): slope # noqa
+        self.a0_nth = a0_nth  # Non-thermal pressure profile (P_nth = a_nth(z)*(r/rvir)^n_nth): normalisation at z=0 # noqa
         self.xv_min = xv_min
         self.xv_max = xv_max
         self.nxv = nxv
@@ -191,13 +195,16 @@ class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
     def _check_mass_def_strict(self, mass_def):
         return mass_def.name != "200c"
 
-    def update_parameters(self, *, log10Mc=None, mu=None, delta=None):
+    def update_parameters(self, *, log10Mc=None, mu=None,
+                          delta=None, a0_nth=None):
         if log10Mc is not None:
             self.log10Mc = log10Mc
         if mu is not None:
             self.mu = mu
         if delta is not None:
             self.delta = delta
+        if a0_nth is not None:
+            self.a0_nth = a0_nth
 
     def _fhga(self, Mv, a, cosmo):
         xstar = Mv*cosmo['h']/self.Mstar
@@ -272,7 +279,25 @@ class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
                                    Pint[i, :], right=0)/(a*rvir[i])
                          for i in range(len(M_use))])  # [Nm, Nr]
 
-        # TODO: account for non-thermal contribution
+        # Account for non-thermal fraction using the parametrisation
+        # in Section 2.1 of 2507.07991
+        if self.a0_nth > 0:
+            f1 = 1/a**0.5
+            fmax = 1/(4**self.n_nth*self.a0_nth)
+            f2 = (fmax-1)*np.tanh(0.5*(1/a-1))+1
+            fnth = min(f1, f2)
+            # Note/TODO, we are modelling the scale dependence as
+            # (r/rvir)^n_nth, although 2507.07991 uses (r/r500)^n_nth.
+            # Michael's code used rvir, so I'm sticking with this.
+            frac_nth = (self.a0_nth * fnth *
+                        np.exp(self.n_nth*lxvir))  # [Nm, Nr]
+            # Truncate so frac_nth < 1
+            sh = frac_nth.shape
+            frac_nth = frac_nth.flatten()
+            frac_nth[frac_nth > 1] = 1
+            frac_nth = frac_nth.reshape(sh)
+            # Keep only the thermal part of the pressure profile
+            prof = prof * (1-frac_nth)
 
         # Account for units conversion to eV/cm^3
         # So far we've calculated Int[dr M(<r) rho(r) / r^2],
@@ -390,3 +415,40 @@ class HaloProfileGasBFCDavid(HaloProfileCustom):
             return Mtot * fhga
 
         return hmc.integrate_over_massfunc(Mhga_integrand, cosmo, a)
+
+
+def bU(hmc, prof, z, cosmo, xmax=1000, xmin=0.001, nx=100):
+    """
+    Compute <bU>
+
+    Parameters
+    ----------
+    hmc : HMCalculator
+        The halo mass-concentration relation.
+    profP : HaloProfile
+        The pressure profile
+    z : float
+        The redshift at which to compute the bias.
+    cosmo : Cosmology
+        The cosmology object.
+    xmax : float, optional
+        The maximum radius to integrate to in units of the virial radius. Default is 1000.  # noqa
+    xmin : float, optional
+        The minimum radius to calculate the profile in units of the virial radius. Default is 0.001.  # noqa
+    nx : int, optional
+        The number of radial points to use for integration. Default is 100.
+
+    Returns
+    -------
+    bU : ndarray
+        <bU>
+    """
+    a = 1/(1 + z)
+    hmc._get_ingredients(cosmo, a, get_bf=True)
+    lMs = hmc._lmass  # [Nm]
+    Ms = 10**lMs  # [Nm]
+    Uvol = prof.volint(cosmo, xmax, Ms, a, xmin=xmin, nx=nx)  # [Nm]
+    norm = prof.get_normalization(cosmo, a, hmc=hmc)
+    bU = hmc._integrate_over_mbf(Uvol)/norm
+
+    return bU
