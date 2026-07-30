@@ -1,6 +1,6 @@
 import numpy as np
 import pyccl as ccl
-from scipy.integrate import cumulative_trapezoid
+from scipy.integrate import cumulative_trapezoid, simpson
 
 
 # Epsilon-mass relation
@@ -117,7 +117,50 @@ class Mvir2MtotNFWt(object):
         return Mcumul
 
 
-class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
+class HaloProfileCustom(ccl.halos.HaloProfile):
+    def volint(self, cosmo, xmax, M, a, xmin=1E-3, nx=100):
+        """Calculates the volume integral of the profile,
+        Int[4 pi r^2 dr rho(r)]. This is used to calculate the total
+        mass of the profile.
+
+        Parameters
+        ----------
+        cosmo : ccl.Cosmology
+            Cosmology object.
+        xmax : float
+            Maximum radius of the integral in units of Rvir.
+        M : float or array_like
+            Halo mass in units of Msun/h.
+        a : float
+            Scale factor.
+        xmin : float, optional
+            Minimum radius of the integral in units of Rvir. Default is 1E-3.
+        nx : int, optional
+            Number of points to use in the integral. Default is 100.
+        Returns
+        -------
+        Vint : float or array_like
+            Volume integral of the profile in units of Msun/h.
+        """
+        # Volume integral of the profile.
+        M_use = np.atleast_1d(M)
+        rvir = self.mass_def.get_radius(cosmo, M_use, a) / a
+
+        xs = np.geomspace(xmin, xmax, nx)
+        lxs = np.log(xs)
+        Vint = []
+        for Mm, rv in zip(M_use, rvir):
+            r = xs * rv
+            prof = self._real(cosmo, r, Mm, a)
+            integrand = prof * xs**3
+            Vint.append(simpson(integrand, x=lxs)*4*np.pi*rv**3)
+        Vint = np.array(Vint)
+        if np.ndim(M) == 0:
+            Vint = np.squeeze(Vint, axis=0)
+        return Vint
+
+
+class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
     def __init__(self, *, mass_def, log10Mc, mu, delta, XH=0.76,
                  Mvir2Mtot, xv_min=1E-3, xv_max=1E3, nxv=260):
         super().__init__(mass_def=mass_def)
@@ -143,7 +186,7 @@ class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
         self.nxv = nxv
         self.Mv2Mt = Mvir2Mtot
         self.XH = XH  # Mass fraction of hydrogen, used to convert total gas pressure into electron P  # noqa
-        self.prefac_P = 2 * (self.XH + 1) / (5 * self.XH + 3)  # This is said prefactor  # noqa
+        self.prefac_Pe = 2 * (self.XH + 1) / (5 * self.XH + 3)  # This is said prefactor  # noqa
 
     def _check_mass_def_strict(self, mass_def):
         return mass_def.name != "200c"
@@ -200,7 +243,8 @@ class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
         fhga = self._fhga(M_use, a, cosmo)
         Mtot = self.Mv2Mt.get_Mtot(M_use, a, cosmo)
         rvir = self.mass_def.get_radius(cosmo, M_use, a) / a
-        rho_hga0 = fhga*Mtot/(4*np.pi*rvir**3*I_hga)
+        # Density normalisation in physical (non-comoving) units.
+        rho_hga0 = fhga*Mtot/(4*np.pi*rvir**3*I_hga*a**3)
 
         # Get integration axis
         xv = np.geomspace(self.xv_min, self.xv_max, self.nxv)  # [Nx]
@@ -216,14 +260,16 @@ class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
         Pint = cumulative_trapezoid(integrand, x=lxv,
                                     initial=0, axis=-1)  # [Nm, Nx]
         # The above is the integral from 0 to xv. We want the
-        # integral from xv to infinity,  so we need to subtract from
+        # integral from xv to infinity, so we need to subtract from
         # the total integral at infinity.
         Pint = Pint[:, -1][:, None] - Pint  # [Nm, Nx]
 
         # Now evaluate this at the desired radii via linear interpolation.
+        # Note that we correct by an additional factor of a to put the
+        # output in physical (non-comoving) units.
         lxvir = np.log(r_use[None, :] / rvir[:, None])  # [Nm, Nr]
         prof = np.array([np.interp(lxvir[i, :], lxv,
-                                   Pint[i, :], right=0)/rvir[i]
+                                   Pint[i, :], right=0)/(a*rvir[i])
                          for i in range(len(M_use))])  # [Nm, Nr]
 
         # TODO: account for non-thermal contribution
@@ -235,7 +281,7 @@ class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
         # in units such that the final profile is in eV/cm^3.
         G_to_eV_cm3 = 1.86031781E-27
         # We also then transform total pressure to electron pressure
-        prof *= G_to_eV_cm3*self.prefac_P
+        prof *= G_to_eV_cm3*self.prefac_Pe
 
         if np.ndim(r) == 0:
             prof = np.squeeze(prof, axis=-1)
@@ -244,7 +290,7 @@ class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
         return prof
 
 
-class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
+class HaloProfileGasBFCDavid(HaloProfileCustom):
     def __init__(self, *, mass_def, log10Mc, mu, delta,
                  Mvir2Mtot, xv_min=1E-3, xv_max=1E3):
         super().__init__(mass_def=mass_def)
