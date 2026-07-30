@@ -1,5 +1,6 @@
 import numpy as np
 import pyccl as ccl
+from scipy.integrate import cumulative_trapezoid
 
 
 # Epsilon-mass relation
@@ -57,6 +58,9 @@ class Mvir2MtotNFWt(object):
         self.conv_int = RegularGridInterpolator([self.cs, self.epss],
                                                 self.conv_arr,
                                                 method=interp_kind)
+        self.int1_int = RegularGridInterpolator([self.cs, self.epss],
+                                                self.int_1,
+                                                method=interp_kind)
 
     def int_NFW(self, xv_max, c, eps):
         if self.analytic:
@@ -88,35 +92,61 @@ class Mvir2MtotNFWt(object):
             Mtot = np.squeeze(Mtot, axis=0)
         return Mtot
 
+    def get_I1(self, Mv, a, cosmo):
+        M_use = np.atleast_1d(Mv)
+        cs = self.cf(cosmo, M_use, a)
+        epss = self.ef(cosmo, M_use, a)
+        coords = np.array([cs, epss]).T
+        I1 = self.int1_int(coords)
+        if np.ndim(Mv) == 0:
+            I1 = np.squeeze(I1, axis=0)
+        return I1
 
-class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
-    def __init__(self, *, mass_def, log10Mc, mu, delta,
-                 Mvir2Mtot, xv_min=1E-3, xv_max=1E3):
+    def get_Mcumul(self, Mv, a, cosmo, xv):
+        M_use = np.atleast_1d(Mv)
+        xv_use = np.atleast_2d(xv)
+        assert ((xv_use.shape[0] == len(M_use)) or
+                (xv_use.shape[0] == 1))
+        cs = self.cf(cosmo, M_use, a)[:, None]
+        epss = self.ef(cosmo, M_use, a)[:, None]
+        Ix = self.int_NFW(xv_use, cs, epss)
+        I1 = self.get_I1(M_use, a, cosmo)[:, None]
+        Mcumul = M_use[:, None] * Ix/I1
+        if np.ndim(Mv) == 0:
+            Mcumul = np.squeeze(Mcumul, axis=0)
+        return Mcumul
+
+
+class HaloProfilePressureNFWBFCDavid(ccl.halos.HaloProfile):
+    def __init__(self, *, mass_def, log10Mc, mu, delta, XH=0.76,
+                 Mvir2Mtot, xv_min=1E-3, xv_max=1E3, nxv=260):
         super().__init__(mass_def=mass_def)
         self.update_precision_fftlog(padding_hi_fftlog=1E2,
                                      padding_lo_fftlog=1E-2,
                                      n_per_decade=500,
                                      plaw_fourier=-2.)
         # All equations below are from 2507.07892, unless otherwise stated.
-        self.log10Mc = log10Mc  # Mass scaling of intermediate-radius slope of hot gas profile. Eq. 2.12.
-        self.mu = mu  # Mass slope of intermediate-radius slope of hot gas profile. Eq. 2.12.
-        self.delta = delta  # Outer slope of the hot gas profile. Eq. 2.12.
-        self.theta_c0 = 0.3  # Scaling of the core radius of the hot gas profile. Eq. 2.12 and page 18.
-        self.alpha = 1.0  # Inner slope of the hot gas profile. Eq. 2.12.
-        self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12.
-        self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18.
-        self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21.
-        self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21.
-        self.eta = 0.07  # High-mass slope of the stellar mass fraction. Eq. 2.21.
-        self.deta = 0.22  # High-mass slope of the central galaxy stellar mass fraction. Eq. 2.21.
-        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2.
+        self.log10Mc = log10Mc  # Mass scaling of intermediate-radius slope of hot gas profile. Eq. 2.12. # noqa
+        self.mu = mu  # Mass slope of intermediate-radius slope of hot gas profile. Eq. 2.12. # noqa
+        self.delta = delta  # Outer slope of the hot gas profile. Eq. 2.12. # noqa
+        self.theta_c0 = 0.3  # Scaling of the core radius of the hot gas profile. Eq. 2.12 and page 18. # noqa
+        self.alpha = 1.0  # Inner slope of the hot gas profile. Eq. 2.12. # noqa
+        self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12. # noqa
+        self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18. # noqa
+        self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21. # noqa
+        self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21. # noqa
+        self.eta = 0.07  # High-mass slope of the stellar mass fraction. Eq. 2.21. # noqa
+        self.deta = 0.22  # High-mass slope of the central galaxy stellar mass fraction. Eq. 2.21. # noqa
+        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2. # noqa   
         self.xv_min = xv_min
         self.xv_max = xv_max
+        self.nxv = nxv
         self.Mv2Mt = Mvir2Mtot
+        self.XH = XH  # Mass fraction of hydrogen, used to convert total gas pressure into electron P  # noqa
+        self.prefac_P = 2 * (self.XH + 1) / (5 * self.XH + 3)  # This is said prefactor  # noqa
 
     def _check_mass_def_strict(self, mass_def):
         return mass_def.name != "200c"
-        super().__init__(mass_def=mass_def)
 
     def update_parameters(self, *, log10Mc=None, mu=None, delta=None):
         if log10Mc is not None:
@@ -141,17 +171,18 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
 
     def _int_hga(self, Mv, a, cosmo):
         xv = np.geomspace(self.xv_min, self.xv_max, 60)
-        prof = self._u(xv[None, :], Mv, a, cosmo)
-        integral = np.trapz(xv[None, :]**3*prof, x=np.log(xv), axis=-1)
+        lxv = np.log(xv)
+        prof = self._u_hga(xv[None, :], Mv, a, cosmo)
+        integral = np.trapz(xv[None, :]**3*prof, x=lxv, axis=-1)
         return integral
 
-    def _u(self, xvir, Mv, a, cosmo):
+    def _u_hga(self, xvir, Mv, a, cosmo):
         Mc = 10**self.log10Mc/cosmo['h']
         xM = (Mv/Mc)**self.mu
 
         beta = 3*xM/(1+xM)
 
-        theta_c = self.theta_c0  # /a**0.5 <- cancelling redshift dependence for now
+        theta_c = self.theta_c0  # /a**0.5 <- TODO: cancelling redshift dependence for now  # noqa
 
         eps = epsilon_bfc(cosmo, Mv, a)
 
@@ -164,7 +195,130 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
         r_use = np.atleast_1d(r)
         M_use = np.atleast_1d(M)
 
-        # Get normalisation
+        # Get gas profile normalisation
+        I_hga = self._int_hga(M_use, a, cosmo)
+        fhga = self._fhga(M_use, a, cosmo)
+        Mtot = self.Mv2Mt.get_Mtot(M_use, a, cosmo)
+        rvir = self.mass_def.get_radius(cosmo, M_use, a) / a
+        rho_hga0 = fhga*Mtot/(4*np.pi*rvir**3*I_hga)
+
+        # Get integration axis
+        xv = np.geomspace(self.xv_min, self.xv_max, self.nxv)  # [Nx]
+        lxv = np.log(xv)
+        # Gas profile
+        ugas = self._u_hga(xv[None, :], M_use, a, cosmo)  # [Nm, Nx]
+        rhogas = rho_hga0[:, None] * ugas  # [Nm, Nx]
+        # Total NFW mass profile.
+        # TODO: account for baryonified mass profile (?)
+        Mcumul = self.Mv2Mt.get_Mcumul(M_use, a, cosmo, xv)  # [Nm, Nx]
+        # Hydrostatic equilibrium integral
+        integrand = rhogas * Mcumul / xv[None, :]  # [Nm, Nx]
+        Pint = cumulative_trapezoid(integrand, x=lxv,
+                                    initial=0, axis=-1)  # [Nm, Nx]
+        # The above is the integral from 0 to xv. We want the
+        # integral from xv to infinity,  so we need to subtract from
+        # the total integral at infinity.
+        Pint = Pint[:, -1][:, None] - Pint  # [Nm, Nx]
+
+        # Now evaluate this at the desired radii via linear interpolation.
+        lxvir = np.log(r_use[None, :] / rvir[:, None])  # [Nm, Nr]
+        prof = np.array([np.interp(lxvir[i, :], lxv,
+                                   Pint[i, :], right=0)/rvir[i]
+                         for i in range(len(M_use))])  # [Nm, Nr]
+
+        # TODO: account for non-thermal contribution
+
+        # Account for units conversion to eV/cm^3
+        # So far we've calculated Int[dr M(<r) rho(r) / r^2],
+        # which has units of Msun^2/Mpc^4.
+        # The quantity below is the gravitational constant in
+        # in units such that the final profile is in eV/cm^3.
+        G_to_eV_cm3 = 1.86031781E-27
+        # We also then transform total pressure to electron pressure
+        prof *= G_to_eV_cm3*self.prefac_P
+
+        if np.ndim(r) == 0:
+            prof = np.squeeze(prof, axis=-1)
+        if np.ndim(M) == 0:
+            prof = np.squeeze(prof, axis=0)
+        return prof
+
+
+class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
+    def __init__(self, *, mass_def, log10Mc, mu, delta,
+                 Mvir2Mtot, xv_min=1E-3, xv_max=1E3):
+        super().__init__(mass_def=mass_def)
+        self.update_precision_fftlog(padding_hi_fftlog=1E2,
+                                     padding_lo_fftlog=1E-2,
+                                     n_per_decade=500,
+                                     plaw_fourier=-2.)
+        # All equations below are from 2507.07892, unless otherwise stated.
+        self.log10Mc = log10Mc  # Mass scaling of intermediate-radius slope of hot gas profile. Eq. 2.12.  # noqa
+        self.mu = mu  # Mass slope of intermediate-radius slope of hot gas profile. Eq. 2.12.  # noqa
+        self.delta = delta  # Outer slope of the hot gas profile. Eq. 2.12. # noqa
+        self.theta_c0 = 0.3  # Scaling of the core radius of the hot gas profile. Eq. 2.12 and page 18. # noqa
+        self.alpha = 1.0  # Inner slope of the hot gas profile. Eq. 2.12. # noqa
+        self.gamma = 1.5  # Outer slope of the hot gas profile. Eq. 2.12. # noqa
+        self.ciga0 = 0.1  # Scaling of the central galaxy cold gas fraction at z=0. Eq. 2.23 and page 18. # noqa
+        self.Mstar = 2.5E11  # Pivot mass forthe stellar mass fraction. Eq. 2.21. # noqa
+        self.Nstar = 0.028  # Normalisation of the stellar mass fractions. Eq. 2.21. # noqa
+        self.eta = 0.07  # High-mass slope of the stellar mass fraction. Eq. 2.21. # noqa
+        self.deta = 0.22  # High-mass slope of the central galaxy stellar mass fraction. Eq. 2.21. # noqa
+        self.zeta = 1.376  # Low-mass slope of the stellar mass fraction. Eq. 2.2.  # noqa
+        self.xv_min = xv_min
+        self.xv_max = xv_max
+        self.Mv2Mt = Mvir2Mtot
+
+    def _check_mass_def_strict(self, mass_def):
+        return mass_def.name != "200c"
+
+    def update_parameters(self, *, log10Mc=None, mu=None, delta=None):
+        if log10Mc is not None:
+            self.log10Mc = log10Mc
+        if mu is not None:
+            self.mu = mu
+        if delta is not None:
+            self.delta = delta
+
+    def _fhga(self, Mv, a, cosmo):
+        xstar = Mv*cosmo['h']/self.Mstar
+        fstar = self.Nstar/(xstar**self.eta+1/xstar**self.zeta)
+        fcga = self.Nstar/(xstar**(self.eta+self.deta)+1/xstar**self.zeta)
+        # fsga = fstar - fcga
+        # fsga = fsga * (fsga > 0)
+        ciga = self.ciga0  # /a**1.5  <- cancelling redshift dependence for now
+        figa = ciga * fcga
+        fb = cosmo['Omega_b'] / (cosmo['Omega_c'] + cosmo['Omega_b'])
+        fhga = fb-fstar-figa
+        fhga = fhga * (fhga > 0)
+        return fhga
+
+    def _int_hga(self, Mv, a, cosmo):
+        xv = np.geomspace(self.xv_min, self.xv_max, 60)
+        prof = self._u_hga(xv[None, :], Mv, a, cosmo)
+        integral = np.trapz(xv[None, :]**3*prof, x=np.log(xv), axis=-1)
+        return integral
+
+    def _u_hga(self, xvir, Mv, a, cosmo):
+        Mc = 10**self.log10Mc/cosmo['h']
+        xM = (Mv/Mc)**self.mu
+
+        beta = 3*xM/(1+xM)
+
+        theta_c = self.theta_c0  # /a**0.5 <- TODO: cancelling redshift dependence for now # noqa
+
+        eps = epsilon_bfc(cosmo, Mv, a)
+
+        return 1/((1+(xvir/theta_c)**self.alpha)**(beta[:, None]/self.alpha) *
+                  (1+(xvir/eps[:, None])**self.gamma)**(self.delta/self.gamma))
+
+    def _real(self, cosmo, r, M, a):
+        # Real-space profile.
+        # Output in units of eV/cm^3
+        r_use = np.atleast_1d(r)
+        M_use = np.atleast_1d(M)
+
+        # Get gas profile normalisation
         I_hga = self._int_hga(M_use, a, cosmo)
         fhga = self._fhga(M_use, a, cosmo)
         Mtot = self.Mv2Mt.get_Mtot(M_use, a, cosmo)
@@ -173,7 +327,7 @@ class HaloProfileGasBFCDavid(ccl.halos.HaloProfile):
 
         # Get shape
         xvir = r_use[None, :] / rvir[:, None]
-        u = self._u(xvir, M_use, a, cosmo)
+        u = self._u_hga(xvir, M_use, a, cosmo)
 
         prof = rho_hga0[:, None] * u
 
