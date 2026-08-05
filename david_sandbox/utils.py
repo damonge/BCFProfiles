@@ -78,7 +78,7 @@ class Mvir2MtotNFWt(object):
             l10xvs = np.arange(self.l10xv_min, l10xv_max, self.dl10xv)
             xvs = 10**l10xvs
             integrand = xvs**2/((1+xvs*c)**2*(1+(xvs/eps)**2)**2)
-            integral = np.trapz(integrand, x=l10xvs*np.log(10))
+            integral = np.trapezoid(integrand, x=l10xvs*np.log(10))
             return integral
 
     def get_Mtot(self, Mv, a, cosmo):
@@ -223,7 +223,7 @@ class HaloProfilePressureNFWBFCDavid(HaloProfileCustom):
         xv = np.geomspace(self.xv_min, self.xv_max, 60)
         lxv = np.log(xv)
         prof = self._u_hga(xv[None, :], Mv, a, cosmo)
-        integral = np.trapz(xv[None, :]**3*prof, x=lxv, axis=-1)
+        integral = np.trapezoid(xv[None, :]**3*prof, x=lxv, axis=-1)
         return integral
 
     def _u_hga(self, xvir, Mv, a, cosmo):
@@ -367,7 +367,7 @@ class HaloProfileGasBFCDavid(HaloProfileCustom):
     def _int_hga(self, Mv, a, cosmo):
         xv = np.geomspace(self.xv_min, self.xv_max, 60)
         prof = self._u_hga(xv[None, :], Mv, a, cosmo)
-        integral = np.trapz(xv[None, :]**3*prof, x=np.log(xv), axis=-1)
+        integral = np.trapezoid(xv[None, :]**3*prof, x=np.log(xv), axis=-1)
         return integral
 
     def _u_hga(self, xvir, Mv, a, cosmo):
