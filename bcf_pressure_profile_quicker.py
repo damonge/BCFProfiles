@@ -1,5 +1,5 @@
 from params_bfc import par as default_par
-from bfc_functions import (
+from bcf_functions import (
     fSTAR_fct,
     uHGA_fct, uIGA_fct, uCGA_fct,
     MNFWtr_fct, mNFWtr_fct, mTOTtr_fct,
@@ -254,6 +254,9 @@ class HaloProfilePressureBFC(ccl.halos.HaloProfilePressure):
  
         Parameters / return signature unchanged from original.
         """
+        rdim = np.ndim(rr)
+        mdim = np.ndim(mvir)
+
         Om = cosmo['Omega_c'] + cosmo['Omega_b']
         Ob = cosmo['Omega_b']
         self.h0 = cosmo['h']
@@ -316,16 +319,14 @@ class HaloProfilePressureBFC(ccl.halos.HaloProfilePressure):
         MNFW = MNFWtr_fct(rbin, self.cvir, tau, mv, self.param)
  
         #  rhoHGA - always needed for the pressure integrand
-        uHGA = np.squeeze(uHGA_fct(rbin, self.cvir, mv, eps, self.param))
-        if uHGA.ndim == 1:
-            uHGA = uHGA[None, :]
-        if mv.size > 1:
-            rho0HGA = (self.Mtot.ravel() /
-                       (4.0 * np.pi * simpson(rbin**2 * uHGA, x=rbin.ravel(), axis=1)))[:, None]
-        else:
-            rho0HGA = self.Mtot / (4.0 * np.pi * simpson(rbin**2 * uHGA, x=rbin.ravel()))
+        uHGA = uHGA_fct(rbin, self.cvir, mv, eps, self.param)
+        rv = (3.0*mv/(4.0*np.pi*DELTAVIR*rhoc_of_z(self.param)))**(1.0/3.0)  # [nm, 1]
+        x = np.geomspace(1E-2, 1E2, 100)
+        rx = x[None, :]*rv
+        u = uHGA_fct(rx, self.cvir, mv, eps, self.param)
+        norm = 4.0 * np.pi * simpson(rx**2 * u, x=rx, axis=-1)
+        rho0HGA = (self.Mtot.ravel() / norm)[:, None]
         rhoHGA = rho0HGA * uHGA * self.fhga
- 
 
         # Mass to use in the pressure integral (M_he) and MDMB
         # use_nfw_mass=True  -> M_he = MNFW
@@ -335,7 +336,6 @@ class HaloProfilePressureBFC(ccl.halos.HaloProfilePressure):
 
         if self.use_nfw_mass and not self.output:
             M_he = MNFW
- 
         else:
             # Need baryon profiles to build MDMB (or for full_output)
             MHGA, MIGA, MCGA, MHGA_tck, MIGA_tck, MCGA_tck, multi = \
@@ -572,6 +572,11 @@ class HaloProfilePressureBFC(ccl.halos.HaloProfilePressure):
  
         pth = pth * self.prefac
  
+        if rdim == 0:
+            pth = np.squeeze(pth, axis=-1)
+        if mdim == 0:
+            pth = np.squeeze(pth, axis=0)
+
         # Output
         if self.output:
             if not self.little_h:
