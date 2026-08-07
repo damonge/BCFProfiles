@@ -1,5 +1,5 @@
 from params_bfc import par as default_par
-from bcf_functions import (
+from bfc_functions import (
     fSTAR_fct,
     uHGA_fct, uIGA_fct, uCGA_fct,
     MNFWtr_fct, mNFWtr_fct, mTOTtr_fct,
